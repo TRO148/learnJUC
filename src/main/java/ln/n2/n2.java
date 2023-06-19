@@ -370,4 +370,22 @@ public class n2 {
 
         thread1.join();
     }
+
+    @Test
+    public void testThread() throws InterruptedException {
+        Thread thread = new Thread(() -> {
+            while(true) {
+                if (Thread.currentThread().isInterrupted()) {
+                    break;
+                }
+            }
+            log.debug("结束了");
+        }, "t1");
+
+        thread.start();
+
+        TimeUnit.SECONDS.sleep(2);
+
+        log.debug("我go啦");
+    }
 }
