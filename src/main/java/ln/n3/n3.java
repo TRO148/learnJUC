@@ -316,4 +316,65 @@ public class n3 {
         thread.start();
         thread.join();
     }
+
+    /*
+    String 和 Integer为不可变类，保证线程安全，因为它不可变
+     */
+    @Test
+    public void testNo() {
+        String a = "12345";
+        System.out.println(System.identityHashCode(a));
+        a = "2";
+        System.out.println(System.identityHashCode(a));
+        System.out.println(System.identityHashCode("2"));
+
+        Integer b = 129;
+        System.out.println(System.identityHashCode(b));
+        b = 130;
+        System.out.println(System.identityHashCode(b));
+        System.out.println(System.identityHashCode(130));
+
+        // 顺便说明在java中Integer，若取值在-127~127之间，则对象相同，
+        // 因为：
+        for (int i1 = 0; i1 < 300; i1++) {
+            Integer c = i1;
+            if (System.identityHashCode(c) != System.identityHashCode(i1)) {
+                System.out.println(i1);
+                break;
+            }
+        }
+    }
+
+    /*
+    探索轻量级锁
+    先加轻量级锁，在java虚拟机栈里存有栈帧lockRecord
+     */
+    @Test
+    public void lightLock() {
+        final Object o = new Object();
+        // 首先Object对象头MonitorWord和主线程的lockRecord的MonitorWord相似的部分交换,
+        // 使得还没上锁的o，状态从01变成了monitorWord的00，同时记录相应的lockRecord信息
+        synchronized (o) {
+            // 查看如果是在本线程，就是只增加一个栈帧lockRecord，然后记录信息为null
+            synchronized (o) {
+                log.debug("hi");
+            }
+        }
+
+        // 这是简单且理想状态下：
+        /*
+         1.有线程已经拥有对象，则进入锁膨胀阶段
+         锁膨胀流程：
+         首先把原先的00，换成10，前面那两位（XX 10 MonitorWord4个字节）指向一个monitor对象
+         type monitor {
+            Thread owner;
+            Thread[] waitSet;
+            Thread[] entitySet;
+         }
+         entitySet把要申请锁的线程添加，并变成阻塞状态。
+
+         在解锁的时候，原先线程先尝试轻量级解锁方式，就是简单的交换monitorWord，如果行不通，则变成重量级锁解锁方式
+         2.自己线程已经拥有对象，则空加lockRecord
+         */
+    }
 }
