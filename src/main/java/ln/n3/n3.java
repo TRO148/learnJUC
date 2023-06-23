@@ -2,8 +2,10 @@ package ln.n3;
 
 import lombok.extern.slf4j.Slf4j;
 import org.junit.Test;
+import org.openjdk.jol.info.ClassLayout;
 
 import java.util.ArrayList;
+import java.util.LinkedList;
 import java.util.concurrent.TimeUnit;
 
 /*
@@ -377,4 +379,144 @@ public class n3 {
          2.自己线程已经拥有对象，则空加lockRecord
          */
     }
+
+    // 探索偏向锁 Biased
+    // 在这里用了新的jar包，jol
+    // 记得vm参数有开启偏向锁
+    @Test
+    public void biasedLock() {
+        // 在这里先随便创建一个对象
+        ArrayList<Integer> o = new ArrayList<>();
+
+        // 先打印一下，看到
+        // 0 8 (object header: mark) 0x0000000000000005 (biasable; age: 0)
+        // 说明上锁
+        log.debug(ClassLayout.parseInstance(o).toPrintable());
+
+        // 使用锁
+        synchronized (o) {
+            // 打印
+            // 说明上锁，并标记线程为···
+            // 例如：0   8 (object header: mark) 0x000002d4e42bc005 (biased: 0x00000000b5390af0; epoch: 0; age: 0)
+            log.debug(ClassLayout.parseInstance(o).toPrintable());
+        }
+
+        // 线程直接使用锁
+        log.debug(ClassLayout.parseInstance(o).toPrintable());
+
+        // 换个线程使用
+        // 切换轻量级锁
+        Thread thread = new Thread(() -> {
+            synchronized (o) {
+                log.debug(ClassLayout.parseInstance(o).toPrintable());
+            }
+        });
+
+        thread.start();
+
+        // 最后检查，发现最后回到01，无锁
+        try {
+            thread.join();
+            log.debug(ClassLayout.parseInstance(o).toPrintable());
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    // 小贴士：用hashCode会禁用偏向锁
+    @Test
+    public void hashCodeMagic() {
+        Object o = new Object();
+        o.hashCode();
+
+        // 例如：
+        // 0   8        (object header: mark)     0x000000146ba0ac01 (hash: 0x146ba0ac; age: 0)
+        log.debug(ClassLayout.parseInstance(o).toPrintable());
+        // 因为0 01状态（无锁）下，存储31位hashcode，
+        // 但是在1 01状态（偏向锁）下，不能存储hashcode，所以在调用hashCode后，不会给hashCode
+
+        // 那为什么不是偏向锁，轻量级锁和重量级锁没有hashcode，却能查询呢？
+        // 因为追起溯源，其实是markWord是交换过来的信息，也就是说线程存储之前交换的信息，可以用它找到hashCode
+        // 准确来说，轻量级锁存在线程栈帧里
+        // 重量级锁存在monitor对象里
+        // 而用偏向锁的话，直接是覆盖掉了，不是交换过去还存在
+        synchronized (o) {
+            o.hashCode();
+            log.debug(ClassLayout.parseInstance(o).toPrintable());
+        }
+    }
+
+    /*
+    偏向锁撤销：
+    1.使用hashCode
+    2.使用wait notify (只有重量级锁才有)
+    3.使用过一次其他的锁
+    4.批量撤销了，在之后类新建的对象也不会上偏向锁了
+     */
+    @Test
+    public void testBatch() {
+        class Dog {
+        }
+
+        LinkedList<Dog> dogs = new LinkedList<>();
+        //测试可偏向
+        log.debug(ClassLayout.parseInstance(new Dog()).toPrintable());
+
+        // 首先测试批量重偏向
+        Thread thread1 = new Thread(() -> {
+            for (int i1 = 0; i1 < 50; i1++) {
+                Dog dog = new Dog();
+                synchronized (dog) {
+                    dogs.add(dog);
+                }
+            }
+
+            synchronized (dogs) {
+                dogs.notify();
+            }
+        }, "t0");
+
+        Thread thread2 = new Thread(() -> {
+            // 等待和打印
+            synchronized (dogs) {
+                try {
+                    dogs.wait();
+                } catch (InterruptedException e) {
+                    throw new RuntimeException(e);
+                }
+            }
+            log.debug(ClassLayout.parseInstance(dogs.get(0)).toPrintable()); // 看第一个和最后一个是否上偏向锁d
+            log.debug(ClassLayout.parseInstance(dogs.get(dogs.size() - 1)).toPrintable());
+
+            for (Dog dog : dogs) {
+                synchronized (dog) {
+                }
+            }
+
+            log.debug(ClassLayout.parseInstance(dogs.get(0)).toPrintable()); // 看第一个和最后一个是否上偏向锁d
+            log.debug(ClassLayout.parseInstance(dogs.get(dogs.size() - 1)).toPrintable());
+        }, "t1");
+
+        thread1.start();
+        thread2.start();
+
+        try {
+            thread1.join();
+            thread2.join();
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        }
+
+        // 因为之前是达到20次，就重偏向2了，所以需要再来20次
+        for (Dog dog : dogs) {
+            synchronized (dog) {
+            }
+        }
+        log.debug(ClassLayout.parseInstance(dogs.get(0)).toPrintable()); // 看第一个和最后一个是否上偏向锁d
+        log.debug(ClassLayout.parseInstance(dogs.get(dogs.size() - 1)).toPrintable());
+
+        // 达到40次后，再无重偏向了
+        log.debug(ClassLayout.parseInstance(new Dog()).toPrintable());
+    }
+
 }
